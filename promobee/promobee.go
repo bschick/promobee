@@ -25,6 +25,7 @@ type thermostatMetrics struct {
 	vocPpbMetric       *prometheus.GaugeVec
 	co2PpmMetric       *prometheus.GaugeVec
 	pressureMetric     *prometheus.GaugeVec
+	vacationStateMetric *prometheus.GaugeVec
 	coolingStateMetric *prometheus.GaugeVec
 	heatingStateMetric *prometheus.GaugeVec
 }
@@ -91,13 +92,19 @@ func newThermostatMetrics() *thermostatMetrics {
 		heatingStateMetric: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "heating_state",
-				Help: "System is actively heating.",
+				Help: "Thermostat is actively heating.",
+			},
+			[]string{"location"}),
+		vacationStateMetric: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "vacation_state",
+				Help: "Thermostat is in vacation movde.",
 			},
 			[]string{"location"}),
 		coolingStateMetric: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "cooling_state",
-				Help: "System is actively cooling.",
+				Help: "Thermostat is actively cooling.",
 			},
 			[]string{"location"}),
 		pressureMetric: prometheus.NewGaugeVec(
@@ -153,6 +160,8 @@ func (a *Accumulator) poll() error {
 		log.Printf("Payload contained no thermostats.")
 		// Not technically an error. Just inconvenient.
 		return nil
+	} else {
+		log.Printf("Polling for %d thermostats.", len(thermostats))
 	}
 	for _, thermostat := range thermostats {
 		if len(thermostat.RemoteSensors) < 1 {
@@ -190,6 +199,7 @@ func (a *Accumulator) poll() error {
 
 		m.holdTempMetric.Reset()
 
+		m.vacationStateMetric.With(prometheus.Labels{"location": thermostat.Name}).Set(0)
 		if thermostat.Settings.HVACMode != "off" {
 			for _, event := range thermostat.Events {
 				if event.Running && event.Type == "hold" {
@@ -199,6 +209,8 @@ func (a *Accumulator) poll() error {
 					if !event.IsHeatOff && thermostat.Settings.HVACMode != "cool" {
 						m.holdTempMetric.WithLabelValues("heat").Set(float64(event.HeatHoldTemp) / 10)
 					}
+				} else if event.Running && event.Type == "vacation" {
+					m.vacationStateMetric.With(prometheus.Labels{"location": thermostat.Name}).Set(1)
 				}
 			}
 		}
@@ -295,7 +307,7 @@ func (a *Accumulator) ServeThermostat(w http.ResponseWriter, req *http.Request) 
 	}
 
 	registry := prometheus.NewRegistry()
-	metrics := []*prometheus.GaugeVec{t.tempMetric, t.occupancyMetric, t.humidityMetric, t.airQualityMetric, t.co2PpmMetric, t.vocPpbMetric, t.pressureMetric, t.holdTempMetric, t.hvacInOperation, t.hvacModeMetric, t.heatingStateMetric, t.coolingStateMetric}
+	metrics := []*prometheus.GaugeVec{t.tempMetric, t.occupancyMetric, t.humidityMetric, t.airQualityMetric, t.co2PpmMetric, t.vocPpbMetric, t.pressureMetric, t.holdTempMetric, t.hvacInOperation, t.hvacModeMetric, t.heatingStateMetric, t.coolingStateMetric, t.vacationStateMetric}
 	for _, m := range metrics {
 		if err := registry.Register(m); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
